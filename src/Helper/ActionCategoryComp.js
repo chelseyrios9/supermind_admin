@@ -7,6 +7,12 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { ACTION_CATEGORIES } from '@/Utils/ActionCategories';
 import { Spinner, Modal, ModalHeader, ModalBody, Dropdown, DropdownToggle, DropdownMenu, DropdownItem, Badge } from 'reactstrap';
 import Btn from "@/Elements/Buttons/Btn";
+import dynamic from 'next/dynamic';
+import AccountContext from './AccountContext';
+
+const ReactJson = dynamic(() => import('react-json-view'), {
+    loading: () => <p>Loading...</p>,
+})
 
 const ActionCategoryComp = ({ name="Actions", getSelectedActions }) => {
     const [hideActionsTree, setHideActionsTree] = useState(true);
@@ -20,6 +26,10 @@ const ActionCategoryComp = ({ name="Actions", getSelectedActions }) => {
     const [actionDescription, setActionDescription] = useState("")
     const [actionCategories, setActionCategories] = useState([])
     const [dropdownOpen, setDropdownOpen] = useState(false);
+    const [testDescriptionData, setTestDescriptionData] = useState()
+    const [testDescriptionError, setTestDescriptionError] = useState()
+    const [testDescriptionParameters, setTestDescriptionParameters] = useState()
+    const {accountData} = useContext(AccountContext);
 
     const {mutate: updateDescriptionMutate, isLoading: updateDescriptionLoading} = useMutation(async ({description, name, categories, id}) => {
         const resp = await fetch("https://nodeapi.supermind.bot/nodeapi/updateNodeDescription", {
@@ -38,8 +48,8 @@ const ActionCategoryComp = ({ name="Actions", getSelectedActions }) => {
         throw respJson.message
     }, { refetchOnWindowFocus: false, select: (data) => data.data });
 
-    const {mutate: deleteDescriptionMutate, isLoading: deleteDescriptionLoading} = useMutation(async ({workflowId}) => {
-        const resp = await fetch(`https://nodeapi.supermind.bot/nodeapi/deleteWorkflow?workflowId=${workflowId}`, {
+    const {mutate: deleteDescriptionMutate, isLoading: deleteDescriptionLoading} = useMutation(async ({id}) => {
+        const resp = await fetch(`https://nodeapi.supermind.bot/nodeapi/deleteNode?id=${id}`, {
             method: "DELETE",
             headers: {
             "Content-Type": "application/json",
@@ -49,10 +59,33 @@ const ActionCategoryComp = ({ name="Actions", getSelectedActions }) => {
         if(respJson.success) {
             setRefetch(prev => !prev)
             setOpenModel(false)
+            setTestDescriptionData()
+            setTestDescriptionError()
+            setTestDescriptionParameters()
             return
         }
         throw respJson.message
     }, { refetchOnWindowFocus: false, select: (data) => data.data });
+
+    const {mutate: testDescriptionMutate, isLoading: testDescriptionLoading} = useMutation(async ({description, workflowId}) => {
+      setTestDescriptionData()
+      setTestDescriptionError()
+      setTestDescriptionParameters()
+      const resp = await fetch(`https://nodeapi.supermind.bot/nodeapi/testNode`, {
+          method: "POST",
+          headers: {
+          "Content-Type": "application/json",
+          },
+          body: JSON.stringify({description, workflowId, fastkartUserId: accountData.id})
+      })
+      const respJson = await resp.json()
+      if(respJson.success) {
+        setTestDescriptionData(respJson.data)
+      } else {
+        setTestDescriptionError(respJson.message)
+      }
+      setTestDescriptionParameters(respJson.parameters)
+    }, { refetchOnWindowFocus: false });
 
     const { error, data: actionsInfo, isLoading } = useQuery(["actions", refetch], async () => {
         const resp = await fetch(`https://nodeapi.supermind.bot/nodeapi/getDescriptions?paginate=10000&page=1&sort=asc&search=${searchAction}`, {
@@ -98,7 +131,11 @@ const ActionCategoryComp = ({ name="Actions", getSelectedActions }) => {
         setOpenModel(true);
     };
     
-    const toggleModal = () => setOpenModel((prev) => !prev);
+    const toggleModal = () => {
+      setOpenModel((prev) => !prev);
+      setTestDescriptionData(null)
+      setTestDescriptionError(null)
+    }
     
     if (isLoading) return <Spinner />;
 
@@ -153,16 +190,29 @@ const ActionCategoryComp = ({ name="Actions", getSelectedActions }) => {
             <Btn
               title="Update Action"
               className="align-items-center btn-theme add-button"
-              loading={updateDescriptionLoading || deleteDescriptionLoading}
+              loading={updateDescriptionLoading || deleteDescriptionLoading || testDescriptionLoading}
               onClick={() => updateDescriptionMutate({description: actionDescription, name: actionDetail?.name, categories: actionCategories, id: actionDetail?.id})}
             />
             <Btn
               title="Delete Action"
               className="align-items-center"
-              loading={updateDescriptionLoading || deleteDescriptionLoading}
-              onClick={() => deleteDescriptionMutate({workflowId: actionDetail?.workflow_id})}
+              loading={updateDescriptionLoading || deleteDescriptionLoading || testDescriptionLoading}
+              onClick={() => {
+                if(confirm("Are you sure you want to delete the action?")){
+                  deleteDescriptionMutate({id: actionDetail?.id})
+                }
+              }}
+            />
+            <Btn
+              title="Test Action"
+              className="align-items-center"
+              loading={updateDescriptionLoading || deleteDescriptionLoading || testDescriptionLoading}
+              onClick={() => testDescriptionMutate({description: actionDescription, workflowId: actionDetail?.workflow_id})}
             />
           </div>
+          {testDescriptionData && <ReactJson src={testDescriptionData} name={actionDetail?.name} />}
+          {testDescriptionParameters && <ReactJson src={testDescriptionParameters} name={`${actionDetail?.name} Parameters`} />}
+          {testDescriptionError && <p>{testDescriptionError}</p>}
         </ModalBody>
       </Modal>
       </>

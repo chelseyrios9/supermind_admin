@@ -30,7 +30,7 @@ const PromptAndModels2 = ({ values, setFieldValue, errors, updateId }) => {
         setPrompts(promptData.data)
     }
   }, [promptLoader, promptData])
-
+console.log(values?.taskSplitter)
   const selectOptions = useMemo(() => (prompts?.map(item => ({id: item.id, name: item.name}))), [prompts]);
 
   return (
@@ -59,6 +59,43 @@ const PromptAndModels2 = ({ values, setFieldValue, errors, updateId }) => {
         </thead>
         <tbody>
           {values?.prompts.map((prompt_id, index) => (
+            <tr key={`prompt_table_${index}`}>
+              <td>{index + 1}</td>
+              <td>{prompts?.filter(item => item.id === prompt_id)[0]?.name}</td>
+              <td>{prompts?.filter(item => item.id === prompt_id)[0]?.prompt_text}</td>
+              <td>
+                <Link href={`/${i18Lang}/${prompt}/update/${prompt_id}`}>
+                  <RiPencilLine />
+                </Link>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>}
+      <Row>
+        <Col xs={9}>
+          <MultiSelectField errors={errors} values={values} setFieldValue={setFieldValue} name="taskSplitter" require="true" data={selectOptions} />
+        </Col>
+        <Col xs={3}>
+          <div className="w-100 flex justify-content-center">
+          <Btn title="Add New Prompt" className="align-items-center btn-theme add-button" onClick={() => {
+            router.push(`/${i18Lang}/${prompt}/create`)
+          }} />
+          </div>
+        </Col>
+      </Row>
+      {values?.taskSplitter?.length > 0 && <Table id="table_id" className={`role-table refund-table all-package theme-table datatable-wrapper`}>
+        <TableLoader fetchStatus={promptLoader} />
+        <thead>
+          <tr>
+            <th className="sm-width">No</th>
+            <th style={{width: "140px"}}>Name</th>
+            <th>Prompt Text</th>
+            <th style={{width: "80px"}}>Edit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {Array.isArray(values?.taskSplitter) && values?.taskSplitter?.map((prompt_id, index) => (
             <tr key={`prompt_table_${index}`}>
               <td>{index + 1}</td>
               <td>{prompts?.filter(item => item.id === prompt_id)[0]?.name}</td>

@@ -34,15 +34,20 @@ const ReactFlowChart = ({name, procedure, description, vectorQuery, procedureId,
     const [stateVectorQuery, setStateVectorQuery] = useState(vectorQuery)
     const [stateProcedureId, setStateProcedureId] = useState(procedureId)
     const [chatMessage, setChatMessage] = useState("")
-    const [openToast, setOpenToast] = useState(false);
+    const [openEditToast, setOpenEditToast] = useState(false);
+    const [openParametersToast, setOpenParametersToast] = useState(false);
     const [openModel, setOpenModel] = useState(false);
     const [prompt, setPrompt] = useState(``)
     const [chatLoading, setChatLoading] = useState(false)
     const [chatData, setChatData] = useState([])
     const [chatLogs, setChatLogs] = useState([])
+    const [parameters, setParameters] = useState([])
+    const [focusSet, setFocusSet] = useState(false)
+    const [parameterCursor, setParameterCursor] = useState(null)
     const [nodes, setNodes, onNodesChange] = useNodesState([])
     const [edges, setEdges, onEdgesChange] = useEdgesState([])
     const editRef = useRef()
+    const parametersRef = useRef([])
     const {accountData} = useContext(AccountContext);
 
     const onConnect = useCallback(
@@ -51,13 +56,12 @@ const ReactFlowChart = ({name, procedure, description, vectorQuery, procedureId,
                 const graphEndIndex = stateProcedure.indexOf("</graph>")
                 const contentToAdd = `<edge source="${params.source}" target="${params.target}" />\n`
                 setStateProcedure(stateProcedure.slice(0, graphEndIndex) + contentToAdd + stateProcedure.slice(graphEndIndex))
-                if(!openToast) setOpenToast(true);
+                if(!openEditToast) setOpenEditToast(true);
+                if(!openParametersToast) setOpenParametersToast(true);
                 if(!editRef.current) await new Promise((res) => setTimeout(res, 200))
                 if(editRef.current.selectionStart !== graphEndIndex || editRef.current.selectionEnd !== graphEndIndex + contentToAdd.length) {
                     setTimeout(() => {
-                        editRef.current.focus()
-                        editRef.current.selectionStart = graphEndIndex
-                        editRef.current.selectionEnd = graphEndIndex + contentToAdd.length
+                        focusOnTextSelection(graphEndIndex, graphEndIndex + contentToAdd.length)
                     }, 10);
                 }
                 return addEdge({...params, type: "customEdge", label: ""}, edges)
@@ -84,7 +88,7 @@ const ReactFlowChart = ({name, procedure, description, vectorQuery, procedureId,
         throw respJson.message
     }, { refetchOnWindowFocus: false });
 
-    const { isLoading: promptsLoading, data: promptsData } = useQuery([], async() => {
+    const { isLoading: promptsLoading, data: promptsData } = useQuery(["prompts"], async() => {
         const resp = await fetch("https://nodeapi.supermind.bot/nodeapi/getPrompts", {
           method: "GET",
           headers: {
@@ -117,8 +121,9 @@ const ReactFlowChart = ({name, procedure, description, vectorQuery, procedureId,
     useEffect(() => {
         if(stateProcedure){
             const parsedData = xmlParser.parse(stateProcedure)
-            const graphData = parsedData.graph || parsedData.procedure?.graph || parsedData.commandBlock?.graph || parsedData.commandBlock?.command?.graph
-            const edgeData = graphData?.edge?.edge || graphData?.edge
+            const graphData = parsedData.graph || parsedData.procedure?.graph || parsedData.commandBlock?.graph || parsedData.commandBlock?.command?.graph || parsedData.Command?.graph
+            const edgeData = graphData?.edge?.edge || graphData?.edge || graphData?.edges?.edge
+            const nodeData = graphData?.node || graphData?.nodes?.node
             const sourceNodeCount = {}
             const targetNodeCount = {}
             const edges = []
@@ -140,7 +145,7 @@ const ReactFlowChart = ({name, procedure, description, vectorQuery, procedureId,
             } else if (typeof edgeData === "object") {
                 handleEdgeInclude(edgeData, 0)
             }
-            const nodes = graphData?.node?.map((n, i) => {
+            const nodes = nodeData?.map((n, i) => {
                 return {id: n["@_id"], type: "customNode", position: {x: 100 * (i % 2 === 0 ? -1 : 1), y: i * 100}, data: {label: n["#text"] || n["@_id"], sourceHandleCount: sourceNodeCount[n["@_id"]] ?? 1, targetHandleCount: targetNodeCount[n["@_id"]] ?? 1, deleteNode}}
             })
             setNodes([])
@@ -175,22 +180,81 @@ const ReactFlowChart = ({name, procedure, description, vectorQuery, procedureId,
         };
     }, [refreshWebSocket])
 
+    const getNodesParameters = (nodeIndex) => {
+        const nodesStartIndex = stateProcedure.indexOf("<nodes>")
+        const nodeEndStr = "</nodes>"
+        const nodesEndIndex = stateProcedure.indexOf(nodeEndStr)
+        const parsedData = xmlParser.parse(stateProcedure.slice(nodesStartIndex, nodesEndIndex + nodeEndStr.length))
+        const tempParameters = []
+        const traverseAllData = (data) => {
+            if(Array.isArray(data)){
+                for (const d of data) {
+                    traverseAllData(d)
+                }
+            } else {
+                for (const [key, value] of Object.entries(data)) {
+                    if(typeof value === "object" && key !== "system"){
+                        traverseAllData(value)
+                    } else if( key === "system") {
+                        let newValue = value
+                        if(typeof value === "object") newValue = JSON.stringify(value)
+                        tempParameters.push({key, value: newValue})
+                    } else {
+                        let newKey = key.replace("@_", "").replace("#")
+                        if(newKey === "key") newKey = `Parameter key`
+                        else if(newKey === "value") newKey = `Parameter value`
+                        tempParameters.push({key: newKey, value})
+                    }
+                }
+            }
+        }
+        nodeIndex--
+        if(nodeIndex >= 0){
+            const selectedNode = parsedData?.nodes?.node?.[nodeIndex]
+            if(selectedNode){
+                traverseAllData(selectedNode)
+                setParameters(tempParameters)
+            }
+        }
+    }
+
+    const focusOnTextSelection = (selectionStart, selectionEnd, shouldFocus=true) => {
+        if(shouldFocus) editRef.current.focus()
+        const fullText = editRef.current.value;
+        editRef.current.value = fullText.substring(0, selectionEnd);
+        const scrollHeight = editRef.current.scrollHeight
+        editRef.current.value = fullText;
+        let scrollTop = scrollHeight;
+        const textareaHeight = editRef.current.clientHeight;
+        if (scrollTop > textareaHeight){
+            scrollTop -= textareaHeight / 2;
+        } else{
+            scrollTop = 0;
+        }
+        editRef.current.scrollTop = scrollTop;
+        editRef.current.selectionStart = selectionStart
+        editRef.current.selectionEnd = selectionEnd
+    }
+
     const handleNodeChange = async (val) => {
         if(val.length === 1 && (val[0].type === "select" || val[0].type === "position")){
             const nodeId = val[0].id
 
-            if(!openToast) setOpenToast(true);
+            if(!openEditToast) setOpenEditToast(true);
+            if(!openParametersToast) setOpenParametersToast(true);
             if(!editRef.current) await new Promise((res) => setTimeout(res, 200))
             const node = nodes.find((node) => node.id === nodeId)
+            const nodeIndex = nodes.findIndex((node) => node.id === nodeId)
+            if(nodeIndex >= 0) getNodesParameters(nodeIndex)
             if(node) {
-                const nodeName = node.data.label
-                const nodeIndexDoubleQuotes = editRef.current.value.indexOf(`<turn id="${nodeId}"`)
-                const nodeIndexSingleQuotes = editRef.current.value.indexOf(`<turn id='${nodeId}'`)
+                const nodeName = node.id
+                const nodesStr = `<nodes>`
+                const nodesIndex = editRef.current.value.indexOf(nodesStr) + nodesStr.length
+                const nodeIndexDoubleQuotes = editRef.current.value.slice(nodesIndex).indexOf(`<node id="${nodeId}"`)
+                const nodeIndexSingleQuotes = editRef.current.value.slice(nodesIndex).indexOf(`<node id='${nodeId}'`)
                 const nodeIndex = nodeIndexDoubleQuotes >= 0 ? nodeIndexDoubleQuotes : nodeIndexSingleQuotes
-                const editIndex = editRef.current.value.slice(nodeIndex).indexOf(nodeName)
-                editRef.current.focus()
-                editRef.current.selectionStart = nodeIndex + editIndex
-                editRef.current.selectionEnd = nodeIndex + editIndex + nodeName.length
+                const editIndex = editRef.current.value.slice(nodesIndex + nodeIndex).indexOf(nodeName)
+                focusOnTextSelection(nodesIndex + nodeIndex + editIndex, nodesIndex + nodeIndex + editIndex + nodeName.length)
             }
         }
         onNodesChange(val)
@@ -201,7 +265,8 @@ const ReactFlowChart = ({name, procedure, description, vectorQuery, procedureId,
         if(filteredVal.length > 1) filteredVal = filteredVal.filter((v) => v.selected )
         if(filteredVal.length === 1 && (filteredVal[0].type === "select" || filteredVal[0].type === "position")){
             const edgeId = filteredVal[0].id
-            if(!openToast) setOpenToast(true);
+            if(!openEditToast) setOpenEditToast(true);
+            if(!openParametersToast) setOpenParametersToast(true);
             if(!editRef.current) await new Promise((res) => setTimeout(res, 200))
             const edge = edges.find((edge) => edge.id === edgeId)
             if(edge) {
@@ -221,16 +286,16 @@ const ReactFlowChart = ({name, procedure, description, vectorQuery, procedureId,
                 const editIndex = editRef.current.value.slice(edgeStartIndex).indexOf(edgeName)
                 editRef.current.focus()
                 if(edgeName && edgeName.length){
-                    editRef.current.selectionStart = edgeStartIndex + editIndex
-                    editRef.current.selectionEnd = edgeStartIndex + editIndex + edgeName.length
-                    if(editRef.current.selectionEnd === editRef.current.selectionStart) editRef.current.selectionEnd += edgeStartDoubleQuotes.length + 3
+                    let selectionEnd = edgeStartIndex + editIndex + edgeName.length
+                    if(editRef.current.selectionEnd === editRef.current.selectionStart) selectionEnd += edgeStartDoubleQuotes.length + 3
+                    focusOnTextSelection(edgeStartIndex + editIndex, selectionEnd)
                 } else {
-                    editRef.current.selectionStart = edgeStartIndex
-                    editRef.current.selectionEnd = edgeStartIndex + edgeEndIndex + edgeEnd.length
+                    focusOnTextSelection(edgeStartIndex, edgeStartIndex + edgeEndIndex + edgeEnd.length)
                 }
             }
         } else if(filteredVal.length === 1 && filteredVal[0].type === "remove"){
-            if(!openToast) setOpenToast(true);
+            if(!openEditToast) setOpenEditToast(true);
+            if(!openParametersToast) setOpenParametersToast(true);
             if(!editRef.current) await new Promise((res) => setTimeout(res, 200))
             const edgeId = filteredVal[0].id
             const edge = edges.find((edge) => edge.id === edgeId)
@@ -249,15 +314,14 @@ const ReactFlowChart = ({name, procedure, description, vectorQuery, procedureId,
                 const edgeEndIndex = isSelfClosingEdge ? edgeDoubleQuotes.length : editRef.current.value.slice(edgeStartIndex).indexOf(edgeEnd)
                 setStateProcedure(stateProcedure.slice(0, edgeStartIndex) + stateProcedure.slice(edgeStartIndex + edgeEndIndex + edgeEnd.length))
                 setTimeout(() => {
-                    editRef.current.focus()
-                    editRef.current.selectionStart = edgeStartIndex
-                    editRef.current.selectionEnd = edgeStartIndex
+                    focusOnTextSelection(edgeStartIndex, edgeStartIndex)
                 }, 10);
             }
         } else if (val[0].type === "reset") {
             const filteredVal = val.filter(({item}) => item.selected)
             for (const {item} of filteredVal) {
-                if(!openToast) setOpenToast(true);
+                if(!openEditToast) setOpenEditToast(true);
+                if(!openParametersToast) setOpenParametersToast(true);
                 if(!editRef.current) await new Promise((res) => setTimeout(res, 200))
                 const edgeName = item.label
                 const edgeSource = item.source
@@ -283,22 +347,23 @@ const ReactFlowChart = ({name, procedure, description, vectorQuery, procedureId,
     </edge>`
                 setStateProcedure(editRef.current.value.slice(0, edgeIndex + edgeDoubleQuotes.length) + textToAdd + editRef.current.value.slice(edgeIndex + edgeDoubleQuotes.length + edgeEndIndex))
                 setTimeout(() => {
-                    editRef.current.focus()
                     const selectionLength = edgeIndex + edgeDoubleQuotes.length + textToAdd.indexOf("</returnValue>")
-                    editRef.current.selectionStart = selectionLength
-                    editRef.current.selectionEnd = selectionLength
+                    focusOnTextSelection(selectionLength, selectionLength)
                 }, 10);
             }
         }
         onEdgesChange(val)
     }
 
-    const toggleToast = () => setOpenToast((prev) => !prev);
+    const toggleEditToast = () => setOpenEditToast((prev) => !prev);
+
+    const toggleParametersToast = () => setOpenParametersToast((prev) => !prev);
 
     const toggleModal = () => setOpenModel((prev) => !prev);
 
     const addTurn = async (name, turnToAdd) => {
-        if(!openToast) setOpenToast(true);
+        if(!openEditToast) setOpenEditToast(true);
+        if(!openParametersToast) setOpenParametersToast(true);
         if(!editRef.current) await new Promise((res) => setTimeout(res, 200))
         const lastNode = nodes[nodes.length - 1]
         const lastNodeDoubleQuotes = `<node id="${lastNode.id}">${lastNode.data.label}</node>`
@@ -330,14 +395,13 @@ const ReactFlowChart = ({name, procedure, description, vectorQuery, procedureId,
         })
         toggleModal()
         setTimeout(() => {
-            editRef.current.focus()
-            editRef.current.selectionStart = lastTurnQuotesIndex + turnEndIndex + nodeToAdd.length
-            editRef.current.selectionEnd = lastTurnQuotesIndex + turnEndIndex + nodeToAdd.length + turnToAdd.length
+            focusOnTextSelection(lastTurnQuotesIndex + turnEndIndex + nodeToAdd.length, lastTurnQuotesIndex + turnEndIndex + nodeToAdd.length + turnToAdd.length)
         }, 400);
     }
 
     const deleteNode = async (nodeId) => {
-        if(!openToast) setOpenToast(true);
+        if(!openEditToast) setOpenEditToast(true);
+        if(!openParametersToast) setOpenParametersToast(true);
         if(!editRef.current) await new Promise((res) => setTimeout(res, 200))
         setStateProcedure(prevStateProcedure => {
             let tempProcedure = prevStateProcedure
@@ -386,6 +450,20 @@ const ReactFlowChart = ({name, procedure, description, vectorQuery, procedureId,
 
     const updateProcedure = () => updateProcedureMutate({procedure: stateProcedure, description: stateDescription, vectorQuery: stateVectorQuery, procedureId: stateProcedureId})
 
+    const handleParametersFocus = async (newKey, value) => {
+        let keyIndexOffset = value.length
+        if(newKey === "Parameter key") newKey = `<key>${value}`
+        else if(newKey === "Parameter value") newKey = `<value>${value}`
+        else if(newKey === "system") newKey = `<system message>${value}`
+        else newKey = `<${newKey}>${value}`
+        if(!openEditToast) setOpenEditToast(true);
+        const nodesStartIndex = stateProcedure.indexOf("<nodes>")
+        const keyIndex = stateProcedure.slice(nodesStartIndex).indexOf(newKey) - keyIndexOffset
+        const valIndex = stateProcedure.slice(nodesStartIndex + keyIndex + newKey.length).indexOf(value)
+        if(!editRef.current) await new Promise((res) => setTimeout(res, 200))
+        return [nodesStartIndex + keyIndex + newKey.length + valIndex, nodesStartIndex + keyIndex + newKey.length + valIndex + value.length]
+    }
+
     return <>
         <div>
             <h3>Description:</h3>
@@ -409,13 +487,13 @@ const ReactFlowChart = ({name, procedure, description, vectorQuery, procedureId,
             <h3>Chat With Procedure:</h3>
             <div style={{display: "flex", gap: 10, justifyContent: "space-around", alignItems: "center"}}>
                 <textarea style={{flex: 2}} placeholder='User Message' rows={5} value={chatMessage} onChange={(e) => setChatMessage(e.target.value)} />
-                <textarea style={{flex: 2}} placeholder='Prompt' rows={5} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-                <Btn
+                {accountData?.system_reserve === 1 && <textarea style={{flex: 2}} placeholder='Prompt' rows={5} value={prompt} onChange={(e) => setPrompt(e.target.value)} />}
+                {accountData?.system_reserve === 1 && <Btn
                     title="Update Prompts"
                     className="align-items-center btn-theme add-button"
                     loading={chatLoading || updatePromptsLoading || promptsLoading}
                     onClick={updatePromptsMutate}
-                />
+                />}
                 <Btn
                     title="Chat With Procedure"
                     className="align-items-center btn-theme add-button"
@@ -443,16 +521,63 @@ const ReactFlowChart = ({name, procedure, description, vectorQuery, procedureId,
             </div>}
         </div>
         <div style={{ width, height, display: "flex", justifyContent: "space-between", gap: 10 }}>
-            <ReactFlow style={{}} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onNodesChange={handleNodeChange} onEdgesChange={handleEdgeChange} onConnect={onConnect} fitView >
+            <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onNodesChange={handleNodeChange} onEdgesChange={handleEdgeChange} onConnect={onConnect} fitView >
                 <Controls />
                 <Background variant="dots" gap={12} size={1} />
             </ReactFlow>
-            <Toast style={{width: "500px"}} isOpen={openToast}>
-                <ToastHeader close={<div style={{cursor:"pointer"}} onClick={toggleToast}>
+            <Toast style={{width: "500px"}} isOpen={openEditToast}>
+                <ToastHeader close={<div style={{cursor:"pointer"}} onClick={toggleEditToast}>
                     {MdClose()}
-                </div>} toggle={toggleToast}>Edit</ToastHeader>
+                </div>} toggle={toggleEditToast}>Edit</ToastHeader>
                 <ToastBody>
                     <textarea ref={editRef} rows="20" style={{"width": "100%"}} type="text" value={stateProcedure} onChange={(e) => setStateProcedure(e.target.value)} />
+                </ToastBody>
+            </Toast>
+            <Toast style={{width: "500px", overflowY: "scroll"}} isOpen={openParametersToast}>
+                <ToastHeader close={<div style={{cursor:"pointer"}} onClick={toggleParametersToast}>
+                    {MdClose()}
+                </div>} toggle={toggleParametersToast}>Parameters</ToastHeader>
+                <ToastBody>
+                    {
+                        parameters?.map((p, i) => {
+                            return <div style={{display: "flex", flexDirection: "column", marginBottom: "5px"}} key={i}>
+                                <label>{p.key}</label>
+                                <input style={{outline: "solid"}} ref={el => parametersRef.current[i] = el} type="text" value={p.value} 
+                                onFocus={async() => {
+                                    if(!focusSet){
+                                        const [selectionStart, selectionEnd] = await handleParametersFocus(p.key, p.value)
+                                        focusOnTextSelection(selectionStart, selectionEnd, false)
+                                        parametersRef.current[i].focus()
+                                        setFocusSet(true)
+                                        setTimeout(() => {
+                                            setFocusSet(false)
+                                        }, 100);
+                                    }
+                                    
+                                }}
+                                onChange={async(e) => {
+                                    const newValue = e.currentTarget.value
+                                    const cursorPosition = e.currentTarget.selectionStart
+                                    const [selectionStart, selectionEnd] = await handleParametersFocus(p.key, p.value)
+                                    const tempParameters = [...parameters]
+                                    tempParameters[i].value = newValue
+                                    setParameters(tempParameters)
+                                    setParameterCursor(cursorPosition)
+                                    setStateProcedure(prev => {
+                                        return prev.slice(0, selectionStart) + newValue + prev.slice(selectionEnd)
+                                    })
+                                    setTimeout(() => {
+                                        setParameterCursor(prev => {
+                                            parametersRef.current[i].setSelectionRange(prev, prev)
+                                            return prev
+                                        })
+                                    }, 1);
+                                }} 
+                                onBlur={() => setParameterCursor(null)}
+                                />
+                            </div>
+                        })
+                    }
                 </ToastBody>
             </Toast>
         </div>
